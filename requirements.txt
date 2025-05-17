@@ -1,0 +1,8 @@
+streamlit
+sentence-transformers
+PyPDF2
+qdrant-client
+python-dotenv
+transformers
+torch
+google-generativeai
