@@ -1,0 +1,77 @@
+✅ STEP-BY-STEP SETUP GUIDE
+1. ✅ Install Python
+Make sure you have Python 3.10 or higher installed.
+
+You can check with:
+
+bash
+Copy
+Edit
+python --version
+2. ✅ Create a Virtual Environment
+In your project folder:
+
+bash
+Copy
+Edit
+python -m venv .venv
+Activate it:
+
+On Windows:
+
+bash
+Copy
+Edit
+.venv\Scripts\activate
+On macOS/Linux:
+
+bash
+Copy
+Edit
+source .venv/bin/activate
+3. ✅ Install Required Packages
+First, create a requirements.txt file:
+
+txt
+Copy
+Edit
+streamlit
+sentence-transformers
+PyPDF2
+qdrant-client
+python-dotenv
+requests
+Then install:
+
+bash
+Copy
+Edit
+pip install -r requirements.txt
+4. ✅ Install and Run Ollama
+Download Ollama from https://ollama.com/download and install it.
+
+After installation, pull OpenChat:
+
+bash
+
+ollama pull openchat
+Then run OpenChat locally in a background terminal:
+
+bash
+
+ollama run openchat
+Leave this running — this is your local language model API.
+
+5. ✅ Set Up Environment Variables
+Create a .env file in your project folder with this:
+
+env
+
+QDRANT_URL=https://your-qdrant-cluster-url
+QDRANT_API_KEY=your-qdrant-api-key
+Get this from your Qdrant Cloud dashboard (or use local Qdrant if you're running it).
+
+6. ✅ Run Your App
+
+Edit
+streamlit run app.py
