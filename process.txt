@@ -1,0 +1,205 @@
+✅ How to Use Gemini API in a Streamlit PDF Q&A App (Step-by-Step)
+🔹 1. Create a Gemini API Key
+Go to https://makersuite.google.com/app/apikey
+
+Click "Create API key"
+
+Copy the key
+
+🔹 2. Create a .env file
+In your project folder (e.g., D:\chatgpt\src), create a .env file and add:
+
+env
+Copy code
+GEMINI_API_KEY=your-api-key-here
+QDRANT_URL=https://your-qdrant-url
+QDRANT_API_KEY=your-qdrant-api-key
+Make sure you use a fresh Gemini API key (from a different Google Cloud project if quota exceeded).
+
+🔹 3. Install Required Python Packages
+Run this in your terminal (inside your venv):
+
+bash
+Copy code
+pip install streamlit google-generativeai python-dotenv PyPDF2 sentence-transformers qdrant-client
+🔹 4. Use This app.py for Gemini API
+Replace openai parts with google.generativeai like this:
+
+python
+Copy code
+import os
+import io
+import time
+import uuid
+import streamlit as st
+import google.generativeai as genai
+from dotenv import load_dotenv
+from PyPDF2 import PdfReader
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.models import Filter
+from qdrant_client.http.models import PointStruct
+
+# Load env
+load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+COLLECTION_NAME = "session_docs"
+
+# Clients
+client_qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+st.set_page_config(page_title="📄 Ask My PDF")
+st.title("📚 Ask Your PDF Documents (Gemini)")
+
+if "docs_uploaded" not in st.session_state:
+    st.session_state.docs_uploaded = []
+if "chat_histories" not in st.session_state:
+    st.session_state.chat_histories = {}
+
+uploaded_files = st.file_uploader("📂 Upload PDFs", type="pdf", accept_multiple_files=True)
+if uploaded_files:
+    for pdf_file in uploaded_files:
+        file_name = pdf_file.name
+        if any(doc["file_name"] == file_name for doc in st.session_state.docs_uploaded):
+            continue
+        doc_id = str(uuid.uuid4())
+
+        with st.spinner(f"📖 Extracting from {file_name}..."):
+            reader = PdfReader(io.BytesIO(pdf_file.read()))
+            full_text = "\n".join([page.extract_text() or "" for page in reader.pages])
+        sentences = full_text.split(". ")
+        chunks, chunk = [], ""
+        for sentence in sentences:
+            if len(chunk) + len(sentence) < 500:
+                chunk += sentence + ". "
+            else:
+                chunks.append(chunk.strip())
+                chunk = sentence + ". "
+        if chunk:
+            chunks.append(chunk.strip())
+        chunks = [c for c in chunks if c.strip()]
+
+        with st.spinner("🔎 Indexing to Qdrant..."):
+            vectors = embed_model.encode(chunks).tolist()
+            points = [PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vectors[i],
+                payload={"text": chunks[i], "doc_id": doc_id, "file_name": file_name}
+            ) for i in range(len(chunks))]
+
+            if COLLECTION_NAME not in [col.name for col in client_qdrant.get_collections().collections]:
+                client_qdrant.recreate_collection(
+                    collection_name=COLLECTION_NAME,
+                    vectors_config={"size": 384, "distance": "Cosine"}
+                )
+
+            client_qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
+
+        st.session_state.docs_uploaded.append({"file_name": file_name, "doc_id": doc_id})
+        st.session_state.chat_histories[doc_id] = []
+
+        st.success(f"✅ {file_name} uploaded and indexed.")
+
+current_uploaded_names = [file.name for file in uploaded_files] if uploaded_files else []
+st.session_state.docs_uploaded = [
+    doc for doc in st.session_state.docs_uploaded if doc["file_name"] in current_uploaded_names
+]
+doc_options = {doc["file_name"]: doc["doc_id"] for doc in st.session_state.docs_uploaded}
+selected_doc = st.selectbox("📑 Select a document:", list(doc_options.keys()) if doc_options else [])
+
+if selected_doc:
+    selected_doc_id = doc_options[selected_doc]
+    query_key = f"query_{selected_doc_id}"
+    query = st.text_input("💬 Ask a question:", key=query_key)
+
+    if st.button("🔍 Get Answer") and query:
+        query_vector = embed_model.encode(query).tolist()
+        results = client_qdrant.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_vector,
+            limit=3,
+            with_payload=True,
+            query_filter=Filter(must=[{"key": "doc_id", "match": {"value": selected_doc_id}}])
+        )
+
+        context = "\n".join([r.payload["text"] for r in results])
+        prompt = f"""Use the context below to answer the user's question.
+
+Context:
+{context}
+
+Question:
+{query}
+"""
+
+        model = genai.GenerativeModel("models/gemini-1.5-pro")
+
+        with st.spinner("💬 Gemini is thinking..."):
+            try:
+                response = model.generate_content(
+                    contents=prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.3,
+                        max_output_tokens=512
+                    )
+                )
+                answer = response.text.strip()
+            except Exception as e:
+                st.error(f"⚠️ Gemini Error: {e}")
+                answer = None
+
+        if answer:
+            st.session_state.chat_histories[selected_doc_id].append((query, answer))
+            st.subheader("💬 Gemini's Answer (typing...)")
+            placeholder = st.empty()
+            typed = ""
+            for char in answer:
+                typed += char
+                placeholder.markdown(typed)
+                time.sleep(0.01)
+
+    if st.button("📜 View Chat History"):
+        history = st.session_state.chat_histories[selected_doc_id]
+        if history:
+            with st.expander("📜 Previous Q&A History", expanded=True):
+                for i, (q, a) in enumerate(history, 1):
+                    st.markdown(f"**Q{i}:** {q}")
+                    st.markdown(f"**A{i}:** {a}")
+                    st.markdown("---")
+        else:
+            st.info("ℹ️ No chat history available for this document.")
+
+    if st.button("🧹 Clear Chat"):
+        st.session_state.chat_histories[selected_doc_id] = []
+        st.rerun()
+🔚 Summary
+Step	Action
+1	Create fresh API key on new project
+2	Add it to .env
+3	Install packages
+4	Use updated app.py (above)
+5	Run: streamlit run app.py
+
+Here is the complete requirements.txt for your Gemini-powered PDF Q&A Streamlit app:
+
+nginx
+Copy code
+streamlit
+google-generativeai
+python-dotenv
+PyPDF2
+sentence-transformers
+qdrant-client
+requests
+✅ How to Use
+Save the file as requirements.txt in your project directory.
+
+Inside your virtual environment, run:
+
+bash
+Copy code
+pip install -r requirements.txt
+This will install all dependencies needed to run your app.py with Gemini, Qdrant, and PDF support.
